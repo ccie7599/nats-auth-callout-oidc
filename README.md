@@ -2,26 +2,38 @@
 
 ## Overview
 
-Demonstrates NATS auth-callout delegating client authentication and authorization to an OIDC identity provider. A Go auth-callout service validates bearer tokens via standard OIDC discovery/JWKS, maps token scopes to NATS pub/sub permissions, and returns signed authorization JWTs to the NATS server.
+Demonstrates NATS auth-callout delegating client authentication and authorization to PingOne (OIDC). A Go auth-callout service validates bearer tokens via OIDC discovery/JWKS, maps token scopes to NATS pub/sub permissions, and returns signed authorization JWTs to the NATS server.
 
-Designed to be provider-agnostic — ships with a mock OIDC provider for local dev and supports live PingOne/PingFederate by changing one environment variable.
+Three PingOne OIDC applications with distinct scopes demonstrate fine-grained access control: admin (full access), publisher (pub only), and subscriber (sub only).
 
 ## Architecture
 
 ```
-┌─────────────┐    OIDC Token     ┌──────────────┐
-│  NATS Client │───────────────────│  OIDC Provider│
-│  (demo-client)│  (bearer token)  │  (mock/Ping)  │
-└──────┬───────┘                   └──────┬────────┘
-       │ CONNECT w/ token                 │ JWKS + Discovery
-       ▼                                  ▼
-┌──────────────┐  $SYS.REQ.USER.AUTH  ┌──────────────┐
-│  NATS Server  │────────────────────▶│  Auth Service │
-│  (auth_callout)│◀───────────────────│  (Go)         │
-└───────────────┘  signed UserClaims  └──────────────┘
+                                     ┌──────────────────┐
+                                     │  PingOne          │
+                                     │  (OIDC Provider)  │
+                                     └────┬─────────┬───┘
+                                JWKS/Disc │         │ token
+                                          ▼         │
+┌──────────────────┐              ┌──────────────┐  │
+│  Web Dashboard   │──WSS:8443──▶│  NATS Server  │  │
+│  (browser)       │              │  TLS:4222     │  │
+│  served HTTPS:443│              │  WSS:8443     │  │
+└────────┬─────────┘              └──────┬────────┘  │
+         │ fetch /api/token/*            │           │
+         ▼                               ▼           │
+┌──────────────────┐    $SYS.REQ.USER.AUTH           │
+│  Nginx           │              ┌──────────────┐   │
+│  HTTPS + proxy   │              │  Auth Service │◀──┘
+└──────────────────┘              │  (Go)         │
+                                  │  audit.>      │
+┌──────────────────┐              └──────────────┘
+│  Demo Client     │──TLS:4222──▶ (same NATS)
+│  (Go CLI)        │
+└──────────────────┘
 ```
 
-**Flow**: Client obtains OIDC token → connects to NATS with token as bearer credential → NATS delegates to auth-service via auth-callout → auth-service validates token against OIDC provider → maps scopes to NATS permissions → returns signed UserClaims JWT → NATS enforces permissions.
+**Flow**: Client obtains PingOne token → connects to NATS (TLS or WSS) with bearer token → NATS delegates to auth-service via `$SYS.REQ.USER.AUTH` → auth-service validates JWT against PingOne JWKS → maps scopes to NATS pub/sub permissions → publishes audit event → returns signed UserClaims JWT → NATS enforces permissions.
 
 ## Scope Mapping
 
@@ -34,10 +46,19 @@ Designed to be provider-agnostic — ships with a mock OIDC provider for local d
 
 ## Quick Start
 
+### Prerequisites
+
+- Docker & Docker Compose
+- TLS certs in `./certs/` (Let's Encrypt via `make certs`, or bring your own)
+- PingOne trial tenant with 3 OIDC Web Apps (see [PingOne Setup](#pingone-setup))
+
+### Run
+
 ```bash
 make build    # Build containers
-make up       # Start NATS, auth service, mock OIDC provider
-make demo     # Run all 6 demo scenarios
+make up       # Start NATS + auth service
+make demo     # Run all 5 CLI demo scenarios
+make up-all   # Start with dashboard
 make down     # Tear down
 ```
 
@@ -50,18 +71,38 @@ make down     # Tear down
 | 3 | Subscriber (`nats:subscribe`) | Connect OK, sub to orders/events, pub denied |
 | 4 | Invalid token | Connection rejected |
 | 5 | No token | Connection rejected |
-| 6 | Live PingOne | Same as admin, against real IdP (requires config) |
 
-### PingOne Live Demo (Optional)
+### Interactive Dashboard
 
-1. Sign up for a free 30-day trial at https://www.pingidentity.com/en/try-ping.html
-2. Copy `.env.example` to `.env` and fill in your PingOne credentials
-3. Run `make demo-ping`
+Available at `https://<your-domain>/` when running with `make up-all`. Dark-themed single-page app with:
+- **Scenario buttons** — click to run each scenario over WSS
+- **Message flow panel** — shows pub/sub results with allow/deny indicators
+- **Auth audit trail** — real-time auth decisions from the auth-service
+- **Live log** — terminal-style connection and test output
 
-See [docs/ping-identity-guide.md](docs/ping-identity-guide.md) for detailed PingOne setup instructions.
+### PingOne Setup
+
+1. Create a PingOne trial at https://www.pingidentity.com/en/try-ping.html
+2. Create a custom resource `nats-api` with scopes: `nats:admin`, `nats:publish`, `nats:subscribe`
+3. Create 3 OIDC Web Apps (each with `client_credentials` grant type):
+   - **Admin app** — assign `nats:admin` scope
+   - **Publisher app** — assign `nats:publish` scope
+   - **Subscriber app** — assign `nats:subscribe` scope
+4. Copy `.env.example` to `.env` and fill in credentials for all 3 apps
+5. Update `nginx/nginx.conf` Base64 Authorization headers for the token proxy endpoints
+
+### TLS Certificates
+
+```bash
+make certs        # Generate via Let's Encrypt + Akamai DNS-01
+make certs-check  # Check cert validity
+```
+
+Requires `certbot` with the `edgedns` authenticator plugin and `~/.edgerc` credentials.
 
 ## Status
 
 - **Tier**: 1 (Demo/POC)
-- **Phase**: Initial Setup
+- **Phase**: Complete
+- **Live**: https://nats-demo.connected-cloud.io/
 - **Scope**: See [SCOPE.md](./SCOPE.md)

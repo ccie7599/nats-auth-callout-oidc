@@ -1,0 +1,99 @@
+services:
+  # --- NKey Generator (init) ---
+  nkey-init:
+    image: natsio/nats-box:latest
+    entrypoint: ["/bin/sh", "/scripts/generate-nkeys.sh"]
+    volumes:
+      - nkeys:/nkeys
+      - ./scripts:/scripts:ro
+
+  # --- NATS Server ---
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "8443:8443"
+      - "8222:8222"
+    volumes:
+      - ./nats-config:/etc/nats:ro
+      - ./certs:/certs:ro
+      - nkeys:/nkeys:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        export NKEY_PUBLIC=$$(cat /nkeys/auth.pub)
+        export AUTH_SERVICE_PASSWORD=$${AUTH_SERVICE_PASSWORD:-callout-secret}
+        exec nats-server -c /etc/nats/nats-server.conf
+    environment:
+      AUTH_SERVICE_PASSWORD: ${AUTH_SERVICE_PASSWORD:-callout-secret}
+    depends_on:
+      nkey-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Auth Callout Service ---
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    environment:
+      NATS_URL: ${NATS_URL:-tls://nats:4222}
+      NATS_USER: auth-service
+      NATS_PASSWORD: ${AUTH_SERVICE_PASSWORD:-callout-secret}
+      OIDC_ISSUER_URL: ${PING_ISSUER_URL}
+      NKEY_SEED_FILE: /nkeys/auth.seed
+      TLS_CA_FILE: /certs/fullchain.pem
+      TLS_SERVER_NAME: ${DEMO_DOMAIN:-nats-demo.connected-cloud.io}
+    volumes:
+      - nkeys:/nkeys:ro
+      - ./certs:/certs:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # --- Web Dashboard (Nginx) ---
+  dashboard:
+    image: nginx:1.27-alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+      - ./certs:/certs:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+    profiles:
+      - dashboard
+
+  # --- Demo Client (CLI) ---
+  demo-client:
+    build:
+      context: ./demo-client
+      dockerfile: Dockerfile
+    environment:
+      NATS_URL: ${NATS_URL:-tls://nats:4222}
+      TLS_CA_FILE: ""
+      PING_ISSUER_URL: ${PING_ISSUER_URL}
+      PING_CLIENT_ID: ${PING_CLIENT_ID}
+      PING_CLIENT_SECRET: ${PING_CLIENT_SECRET}
+      PING_PUB_CLIENT_ID: ${PING_PUB_CLIENT_ID}
+      PING_PUB_CLIENT_SECRET: ${PING_PUB_CLIENT_SECRET}
+      PING_SUB_CLIENT_ID: ${PING_SUB_CLIENT_ID}
+      PING_SUB_CLIENT_SECRET: ${PING_SUB_CLIENT_SECRET}
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      auth-service:
+        condition: service_started
+    profiles:
+      - cli
+
+volumes:
+  nkeys:
+    driver: local

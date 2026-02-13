@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NATS Auth-Callout OIDC Demo</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --success: #3fb950;
+    --failure: #f85149;
+    --warning: #d29922;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header h1 span { color: var(--accent); }
+  .status-badge {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-secondary);
+  }
+  .status-dot.connected { background: var(--success); }
+  .status-dot.error { background: var(--failure); }
+  .main {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    flex: 1;
+    overflow: hidden;
+  }
+  .sidebar {
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .sidebar h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .scenario-btn {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .scenario-btn:hover { border-color: var(--accent); background: #1c2129; }
+  .scenario-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .scenario-btn .num {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .scenario-btn.running { border-color: var(--warning); }
+  .scenario-btn.passed .num { background: var(--success); color: #000; }
+  .scenario-btn.failed .num { background: var(--failure); color: #fff; }
+  .scope-tag {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--bg-primary);
+    color: var(--accent);
+    font-family: var(--mono);
+    margin-left: auto;
+  }
+  .content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .panel {
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .panel:last-child { border-bottom: none; }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+  }
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  #flow-panel { flex: 2; }
+  #audit-panel { flex: 1; }
+  #log-panel { flex: 2; background: #010409; }
+  #log-panel .panel-body { color: var(--text-secondary); }
+  .flow-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .flow-icon { width: 16px; text-align: center; }
+  .flow-op {
+    width: 36px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .flow-op.pub { background: #1f3a2f; color: var(--success); }
+  .flow-op.sub { background: #1a2c4a; color: var(--accent); }
+  .flow-subject { color: var(--text-primary); }
+  .flow-result { margin-left: auto; font-size: 11px; }
+  .flow-result.ok { color: var(--success); }
+  .flow-result.denied { color: var(--failure); }
+  .audit-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 11px;
+  }
+  .audit-time { color: var(--text-secondary); min-width: 65px; }
+  .audit-decision { font-weight: 700; min-width: 55px; }
+  .audit-decision.success { color: var(--success); }
+  .audit-decision.failure { color: var(--failure); }
+  .audit-detail { color: var(--text-secondary); }
+  .log-line { padding: 1px 0; }
+  .log-line.error { color: var(--failure); }
+  .log-line.success { color: var(--success); }
+  .log-line.info { color: var(--warning); }
+  .log-prefix { color: var(--text-secondary); user-select: none; }
+  .sidebar-footer {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .sidebar-btns {
+    display: flex;
+    gap: 8px;
+  }
+  .run-all-btn {
+    flex: 1;
+    padding: 10px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .run-all-btn:hover { opacity: 0.9; }
+  .run-all-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .reset-btn {
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .reset-btn:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+  /* -- Auth flow diagram -- */
+  .auth-flow {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px 10px;
+    overflow: hidden;
+  }
+  .af-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .af-node {
+    flex-shrink: 0;
+    width: 100px;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+  }
+  .af-box {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: var(--bg-primary);
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .af-node.active .af-box {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(88,166,255,0.25);
+  }
+  .af-node.fail .af-box {
+    border-color: var(--failure);
+    box-shadow: 0 0 12px rgba(248,81,73,0.3);
+  }
+  .af-node.ok .af-box {
+    border-color: var(--success);
+    box-shadow: 0 0 12px rgba(63,185,80,0.25);
+  }
+  .af-box-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+  }
+  .af-box-sub {
+    font-size: 9px;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+  }
+  .af-conn {
+    flex: 1;
+    position: relative;
+    height: 48px;
+    min-width: 60px;
+  }
+  .af-line-fwd, .af-line-ret {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: var(--border);
+    transition: background 0.3s, height 0.3s;
+  }
+  .af-line-fwd { top: 16px; }
+  .af-line-ret { top: 32px; }
+  .af-arrow-head {
+    position: absolute;
+    width: 0; height: 0;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: border-color 0.3s;
+  }
+  .af-arrow-head.fwd {
+    right: 0; top: 12px;
+    border-left: 6px solid var(--border);
+  }
+  .af-arrow-head.ret {
+    left: 0; top: 28px;
+    border-right: 6px solid var(--border);
+  }
+  .af-label {
+    position: absolute;
+    font-size: 8px;
+    font-family: var(--mono);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: color 0.3s;
+  }
+  .af-label.fwd { top: 4px; left: 50%; transform: translateX(-50%); }
+  .af-label.ret { top: 36px; left: 50%; transform: translateX(-50%); }
+  .af-label.lit { color: var(--accent); }
+  .af-label.fail-lit { color: var(--failure); }
+  .af-label.ok-lit { color: var(--success); }
+  .af-line-fwd.lit, .af-line-ret.lit {
+    height: 2px !important; background: var(--accent) !important; margin-top: -0.5px;
+  }
+  .af-line-fwd.fail-lit, .af-line-ret.fail-lit {
+    height: 2px !important; background: var(--failure) !important; margin-top: -0.5px;
+  }
+  .af-line-fwd.ok-lit, .af-line-ret.ok-lit {
+    height: 2px !important; background: var(--success) !important; margin-top: -0.5px;
+  }
+  .af-arrow-head.fwd.lit { border-left-color: var(--accent); }
+  .af-arrow-head.ret.lit { border-right-color: var(--accent); }
+  .af-arrow-head.fwd.fail-lit { border-left-color: var(--failure); }
+  .af-arrow-head.ret.fail-lit { border-right-color: var(--failure); }
+  .af-arrow-head.fwd.ok-lit { border-left-color: var(--success); }
+  .af-arrow-head.ret.ok-lit { border-right-color: var(--success); }
+  .af-pulse {
+    position: absolute;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    opacity: 0;
+  }
+  .af-pulse.fwd { top: 13px; }
+  .af-pulse.ret { top: 29px; }
+  .af-pulse.go-fwd { animation: pulse-fwd 0.5s ease-in-out forwards; }
+  .af-pulse.go-ret { animation: pulse-ret 0.5s ease-in-out forwards; }
+
+  @keyframes pulse-fwd {
+    0%   { left: 0; opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { left: calc(100% - 6px); opacity: 0; }
+  }
+  @keyframes pulse-ret {
+    0%   { right: 0; left: auto; opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { right: calc(100% - 6px); left: auto; opacity: 0; }
+  }
+  .af-step-num {
+    position: absolute;
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--bg-primary);
+    background: var(--text-secondary);
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.3s;
+  }
+  .af-step-num.fwd { top: 9px; left: 4px; }
+  .af-step-num.ret { top: 25px; right: 4px; left: auto; }
+
+  @media (max-width: 768px) {
+    .main { grid-template-columns: 1fr; }
+    .sidebar { flex-direction: row; flex-wrap: wrap; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    .sidebar h2 { display: none; }
+    .sidebar-footer { margin-top: 0; border-top: none; padding-top: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NATS <span>Auth-Callout</span> OIDC Demo</h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <a href="https://github.com/ccie7599/nats-auth-callout-oidc" target="_blank" rel="noopener"
+       style="display:flex;align-items:center;gap:6px;color:var(--text-secondary);text-decoration:none;font-size:13px;transition:color .15s;"
+       onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text-secondary)'">
+      <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      Docs &amp; Source
+    </a>
+    <div class="status-badge">
+      <div class="status-dot" id="auditDot"></div>
+      <span id="auditStatus">Connecting audit listener...</span>
+    </div>
+  </div>
+</header>
+
+<div class="auth-flow" id="authFlow">
+  <div class="af-row">
+    <div class="af-node" id="af-client">
+      <div class="af-box">
+        <div class="af-box-title">Client</div>
+        <div class="af-box-sub">browser / cli</div>
+      </div>
+    </div>
+    <div class="af-conn" id="af-c0">
+      <div class="af-line-fwd"></div>
+      <div class="af-arrow-head fwd"></div>
+      <div class="af-line-ret"></div>
+      <div class="af-arrow-head ret"></div>
+      <span class="af-step-num fwd">1</span>
+      <span class="af-label fwd">CONNECT + token</span>
+      <span class="af-step-num ret">6</span>
+      <span class="af-label ret">permissions enforced</span>
+      <div class="af-pulse fwd"></div>
+      <div class="af-pulse ret"></div>
+    </div>
+    <div class="af-node" id="af-nats">
+      <div class="af-box">
+        <div class="af-box-title">NATS Server</div>
+        <div class="af-box-sub">tls:4222 wss:8443</div>
+      </div>
+    </div>
+    <div class="af-conn" id="af-c1">
+      <div class="af-line-fwd"></div>
+      <div class="af-arrow-head fwd"></div>
+      <div class="af-line-ret"></div>
+      <div class="af-arrow-head ret"></div>
+      <span class="af-step-num fwd">2</span>
+      <span class="af-label fwd">$SYS.REQ.USER.AUTH</span>
+      <span class="af-step-num ret">5</span>
+      <span class="af-label ret">signed UserClaims</span>
+      <div class="af-pulse fwd"></div>
+      <div class="af-pulse ret"></div>
+    </div>
+    <div class="af-node" id="af-auth">
+      <div class="af-box">
+        <div class="af-box-title">Auth Service</div>
+        <div class="af-box-sub">auth-callout</div>
+      </div>
+    </div>
+    <div class="af-conn" id="af-c2">
+      <div class="af-line-fwd"></div>
+      <div class="af-arrow-head fwd"></div>
+      <div class="af-line-ret"></div>
+      <div class="af-arrow-head ret"></div>
+      <span class="af-step-num fwd">3</span>
+      <span class="af-label fwd">JWKS verify</span>
+      <span class="af-step-num ret">4</span>
+      <span class="af-label ret">claims + scopes</span>
+      <div class="af-pulse fwd"></div>
+      <div class="af-pulse ret"></div>
+    </div>
+    <div class="af-node" id="af-ping">
+      <div class="af-box">
+        <div class="af-box-title">PingOne</div>
+        <div class="af-box-sub">OIDC provider</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="sidebar">
+    <h2>Scenarios</h2>
+    <button class="scenario-btn" data-scenario="admin" onclick="runScenario('admin')">
+      <span class="num">1</span> Admin
+      <span class="scope-tag">nats:admin</span>
+    </button>
+    <button class="scenario-btn" data-scenario="publisher" onclick="runScenario('publisher')">
+      <span class="num">2</span> Publisher
+      <span class="scope-tag">nats:publish</span>
+    </button>
+    <button class="scenario-btn" data-scenario="subscriber" onclick="runScenario('subscriber')">
+      <span class="num">3</span> Subscriber
+      <span class="scope-tag">nats:subscribe</span>
+    </button>
+    <button class="scenario-btn" data-scenario="invalid" onclick="runScenario('invalid')">
+      <span class="num">4</span> Invalid Token
+      <span class="scope-tag">bad jwt</span>
+    </button>
+    <button class="scenario-btn" data-scenario="notoken" onclick="runScenario('notoken')">
+      <span class="num">5</span> No Token
+      <span class="scope-tag">none</span>
+    </button>
+    <div class="sidebar-footer">
+      <div class="sidebar-btns">
+        <button class="run-all-btn" id="runAllBtn" onclick="runAll()">Run All</button>
+        <button class="reset-btn" onclick="resetAll()">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="panel" id="flow-panel">
+      <div class="panel-header">Message Flow</div>
+      <div class="panel-body" id="flowBody"></div>
+    </div>
+    <div class="panel" id="audit-panel">
+      <div class="panel-header">Auth Audit Trail (live)</div>
+      <div class="panel-body" id="auditBody"></div>
+    </div>
+    <div class="panel" id="log-panel">
+      <div class="panel-header">Log</div>
+      <div class="panel-body" id="logBody"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+
+const WSS_URL = `wss://${location.hostname}:8443`;
+
+const SCENARIOS = {
+  admin: {
+    name: 'Admin',
+    tokenURL: '/api/token/admin',
+    scope: 'nats:admin',
+    tests: [
+      { op: 'pub', subject: 'orders.new', expect: true },
+      { op: 'pub', subject: 'events.click', expect: true },
+      { op: 'pub', subject: 'any.random.subject', expect: true },
+      { op: 'sub', subject: 'orders.>', expect: true },
+      { op: 'sub', subject: 'events.>', expect: true },
+    ]
+  },
+  publisher: {
+    name: 'Publisher',
+    tokenURL: '/api/token/publisher',
+    scope: 'nats:publish',
+    tests: [
+      { op: 'pub', subject: 'orders.new', expect: true },
+      { op: 'pub', subject: 'events.click', expect: true },
+      { op: 'sub', subject: 'orders.>', expect: false },
+      { op: 'sub', subject: 'events.>', expect: false },
+    ]
+  },
+  subscriber: {
+    name: 'Subscriber',
+    tokenURL: '/api/token/subscriber',
+    scope: 'nats:subscribe',
+    tests: [
+      { op: 'sub', subject: 'orders.>', expect: true },
+      { op: 'sub', subject: 'events.>', expect: true },
+      { op: 'pub', subject: 'orders.new', expect: false },
+      { op: 'pub', subject: 'events.click', expect: false },
+    ]
+  },
+  invalid: {
+    name: 'Invalid Token',
+    token: 'this.is.not.a.valid.jwt',
+    tests: []
+  },
+  notoken: {
+    name: 'No Token',
+    token: null,
+    tests: []
+  }
+};
+
+let auditConn = null;
+let running = false;
+
+// -- DOM helpers --
+const $ = (sel) => document.querySelector(sel);
+const flowBody = $('#flowBody');
+const auditBody = $('#auditBody');
+const logBody = $('#logBody');
+
+function log(msg, level = '') {
+  const el = document.createElement('div');
+  el.className = `log-line ${level}`;
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  el.innerHTML = `<span class="log-prefix">${ts} &gt; </span>${escapeHtml(msg)}`;
+  logBody.appendChild(el);
+  logBody.scrollTop = logBody.scrollHeight;
+}
+
+function addFlow(op, subject, ok, detail) {
+  const row = document.createElement('div');
+  row.className = 'flow-row';
+  row.innerHTML = `
+    <span class="flow-icon">${ok ? '&#10003;' : '&#10007;'}</span>
+    <span class="flow-op ${op}">${op.toUpperCase()}</span>
+    <span class="flow-subject">${escapeHtml(subject)}</span>
+    <span class="flow-result ${ok ? 'ok' : 'denied'}">${ok ? 'allowed' : detail || 'denied'}</span>
+  `;
+  flowBody.appendChild(row);
+  flowBody.scrollTop = flowBody.scrollHeight;
+}
+
+function addAudit(event) {
+  const row = document.createElement('div');
+  row.className = 'audit-row';
+  const ts = new Date(event.timestamp).toLocaleTimeString('en-US', { hour12: false });
+  row.innerHTML = `
+    <span class="audit-time">${ts}</span>
+    <span class="audit-decision ${event.decision}">${event.decision.toUpperCase()}</span>
+    <span class="audit-detail">sub=${escapeHtml(event.token_sub || 'n/a')} scopes=${escapeHtml((event.scopes || []).join(',') || 'none')}${event.reason ? ' reason=' + escapeHtml(event.reason) : ''}</span>
+  `;
+  auditBody.appendChild(row);
+  auditBody.scrollTop = auditBody.scrollHeight;
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function setBtn(scenario, state) {
+  const btn = $(`[data-scenario="${scenario}"]`);
+  if (!btn) return;
+  btn.classList.remove('running', 'passed', 'failed');
+  if (state) btn.classList.add(state);
+}
+
+function setAllBtns(disabled) {
+  document.querySelectorAll('.scenario-btn').forEach(b => b.disabled = disabled);
+  $('#runAllBtn').disabled = disabled;
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// -- Auth flow diagram animation --
+const AF_NODES = ['af-client', 'af-nats', 'af-auth', 'af-ping'];
+const AF_STEPS = [
+  { nodes: [0, 1], conn: 0, dir: 'fwd' },  // step 1: client -> nats
+  { nodes: [1, 2], conn: 1, dir: 'fwd' },  // step 2: nats -> auth
+  { nodes: [2, 3], conn: 2, dir: 'fwd' },  // step 3: auth -> ping
+  { nodes: [2, 3], conn: 2, dir: 'ret' },  // step 4: ping -> auth
+  { nodes: [1, 2], conn: 1, dir: 'ret' },  // step 5: auth -> nats
+  { nodes: [0, 1], conn: 0, dir: 'ret' },  // step 6: nats -> client
+];
+const afConns = document.querySelectorAll('.af-conn');
+
+function clearDiagram() {
+  document.querySelectorAll('.af-node').forEach(n => n.classList.remove('active', 'fail', 'ok'));
+  document.querySelectorAll('.af-label').forEach(l => l.classList.remove('lit', 'fail-lit', 'ok-lit'));
+  document.querySelectorAll('.af-line-fwd, .af-line-ret').forEach(l => l.classList.remove('lit', 'fail-lit', 'ok-lit'));
+  document.querySelectorAll('.af-arrow-head').forEach(a => a.classList.remove('lit', 'fail-lit', 'ok-lit'));
+  document.querySelectorAll('.af-step-num').forEach(s => s.style.background = '');
+  document.querySelectorAll('.af-pulse').forEach(p => {
+    p.className = p.className.replace(/go-fwd|go-ret/g, '').trim();
+    p.style.background = '';
+    p.style.boxShadow = '';
+  });
+}
+
+// mode: 'active' (blue), 'fail' (red), 'ok' (green)
+function flowStep(stepIndex, mode = 'active') {
+  clearDiagram();
+  const s = AF_STEPS[stepIndex];
+  const nodeCls = mode;
+  const labelCls = mode === 'active' ? 'lit' : mode === 'fail' ? 'fail-lit' : 'ok-lit';
+  const colors = { active: 'var(--accent)', fail: 'var(--failure)', ok: 'var(--success)' };
+  const color = colors[mode];
+
+  s.nodes.forEach(i => document.getElementById(AF_NODES[i])?.classList.add(nodeCls));
+  const conn = afConns[s.conn];
+  if (conn) {
+    conn.querySelector(`.af-line-${s.dir}`)?.classList.add(labelCls);
+    conn.querySelector(`.af-arrow-head.${s.dir}`)?.classList.add(labelCls);
+    conn.querySelector(`.af-label.${s.dir}`)?.classList.add(labelCls);
+    const num = conn.querySelector(`.af-step-num.${s.dir}`);
+    if (num) num.style.background = color;
+    const pulse = conn.querySelector(`.af-pulse.${s.dir}`);
+    if (pulse) {
+      pulse.className = `af-pulse ${s.dir}`;
+      pulse.style.background = color;
+      pulse.style.boxShadow = `0 0 6px ${color}`;
+      void pulse.offsetWidth;
+      pulse.classList.add(s.dir === 'fwd' ? 'go-fwd' : 'go-ret');
+    }
+  }
+}
+
+// Flash NATS node + "permissions enforced" connector in red for denial, green for allowed
+async function flashEnforcement(ok) {
+  const mode = ok ? 'ok' : 'fail';
+  const labelCls = ok ? 'ok-lit' : 'fail-lit';
+  const color = ok ? 'var(--success)' : 'var(--failure)';
+  clearDiagram();
+
+  // Light up Client and NATS
+  document.getElementById('af-client')?.classList.add(mode);
+  document.getElementById('af-nats')?.classList.add(mode);
+
+  // Light up the return path (step 6 connector = conn 0, ret)
+  const conn = afConns[0];
+  if (conn) {
+    conn.querySelector('.af-line-ret')?.classList.add(labelCls);
+    conn.querySelector('.af-arrow-head.ret')?.classList.add(labelCls);
+    conn.querySelector('.af-label.ret')?.classList.add(labelCls);
+    const num = conn.querySelector('.af-step-num.ret');
+    if (num) num.style.background = color;
+    const pulse = conn.querySelector('.af-pulse.ret');
+    if (pulse) {
+      pulse.className = 'af-pulse ret';
+      pulse.style.background = color;
+      pulse.style.boxShadow = `0 0 6px ${color}`;
+      void pulse.offsetWidth;
+      pulse.classList.add('go-ret');
+    }
+  }
+  await delay(600);
+}
+
+// -- NATS via nats.ws --
+let natsModule = null;
+async function loadNats() {
+  if (natsModule) return natsModule;
+  natsModule = await import('https://cdn.jsdelivr.net/npm/nats.ws@1.30.0/esm/nats.js');
+  return natsModule;
+}
+
+async function fetchToken(tokenURL, scope) {
+  const resp = await fetch(tokenURL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: scope
+    })
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Token fetch failed: ${resp.status} ${text}`);
+  }
+  const data = await resp.json();
+  return data.access_token;
+}
+
+// -- Audit listener (persistent admin connection) --
+async function connectAuditListener() {
+  try {
+    const { connect, StringCodec } = await loadNats();
+    const sc = StringCodec();
+    const token = await fetchToken('/api/token/admin', 'nats:admin');
+
+    auditConn = await connect({ servers: WSS_URL, token });
+    $('#auditDot').classList.add('connected');
+    $('#auditStatus').textContent = 'Audit listener connected';
+
+    const sub = auditConn.subscribe('auth.audit.>');
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const event = JSON.parse(sc.decode(msg.data));
+          addAudit(event);
+        } catch {}
+      }
+    })();
+  } catch (err) {
+    $('#auditDot').classList.add('error');
+    $('#auditStatus').textContent = `Audit: ${err.message}`;
+    log(`Audit listener failed: ${err.message}`, 'error');
+  }
+}
+
+// -- Permission test via message delivery --
+async function testPub(nc, sc, subject) {
+  if (!auditConn) return false;
+  const probe = `${subject}.probe-${Date.now()}`;
+  try {
+    const probeSub = auditConn.subscribe(probe, { max: 1 });
+    const iter = probeSub[Symbol.asyncIterator]();
+    await auditConn.flush();
+    await delay(100);
+    nc.publish(probe, sc.encode('probe'));
+    await nc.flush();
+    const got = await Promise.race([
+      iter.next().then(() => true),
+      delay(1000).then(() => false)
+    ]);
+    try { probeSub.unsubscribe(); } catch {}
+    return got;
+  } catch {
+    return false;
+  }
+}
+
+async function testSub(nc, sc, subject) {
+  if (!auditConn) return false;
+  const probe = `${subject.replace('>', '')}probe-${Date.now()}`;
+  try {
+    const probeSub = nc.subscribe(probe, { max: 1 });
+    const iter = probeSub[Symbol.asyncIterator]();
+    await nc.flush();
+    await delay(100);
+    auditConn.publish(probe, sc.encode('probe'));
+    await auditConn.flush();
+    const got = await Promise.race([
+      iter.next().then(() => true),
+      delay(1000).then(() => false)
+    ]);
+    try { probeSub.unsubscribe(); } catch {}
+    return got;
+  } catch {
+    return false;
+  }
+}
+
+// -- Scenario execution --
+async function runScenario(id) {
+  if (running) return;
+  running = true;
+  setAllBtns(true);
+  setBtn(id, 'running');
+
+  const cfg = SCENARIOS[id];
+  log(`--- ${cfg.name} ---`, 'info');
+
+  const sep = document.createElement('div');
+  sep.style.cssText = 'padding:4px 0;color:var(--text-secondary);font-size:11px;border-top:1px solid var(--border);margin-top:4px';
+  sep.textContent = `${cfg.name}`;
+  flowBody.appendChild(sep);
+
+  try {
+    const { connect, StringCodec } = await loadNats();
+    const sc = StringCodec();
+    let token;
+
+    clearDiagram();
+
+    // Get token
+    if (cfg.tokenURL) {
+      log(`Fetching PingOne token (scope: ${cfg.scope})...`);
+      token = await fetchToken(cfg.tokenURL, cfg.scope);
+      log(`Token acquired (scope: ${cfg.scope})`, 'success');
+    } else if (cfg.token !== undefined) {
+      token = cfg.token;
+      if (token) log(`Using invalid token: ${token.substring(0, 20)}...`);
+      else log('Connecting with no token');
+    }
+
+    // Step 1: Client -> NATS
+    flowStep(0, 'active');
+    log('Connecting to NATS via WSS...');
+    let nc;
+    try {
+      const opts = { servers: WSS_URL };
+      if (token !== null && token !== undefined) opts.token = token;
+      nc = await connect(opts);
+    } catch (err) {
+      if (id === 'invalid' || id === 'notoken') {
+        await delay(400);
+        flowStep(1, 'active');   // NATS -> Auth
+        await delay(400);
+        flowStep(2, 'active');   // Auth -> PingOne
+        await delay(400);
+        flowStep(3, 'fail');     // PingOne -> Auth (FAIL)
+        await delay(400);
+        flowStep(4, 'fail');     // Auth -> NATS (error)
+        await delay(400);
+        flowStep(5, 'fail');     // NATS -> Client (rejected)
+        log(`Connection rejected: ${err.message}`, 'success');
+        addFlow('connect', WSS_URL, false, 'rejected');
+        setBtn(id, 'passed');
+        return;
+      }
+      throw err;
+    }
+
+    // Steps 2-6: successful auth-callout
+    await delay(300);
+    flowStep(1, 'active');   // NATS -> Auth
+    await delay(300);
+    flowStep(2, 'active');   // Auth -> PingOne
+    await delay(300);
+    flowStep(3, 'ok');       // PingOne -> Auth (verified)
+    await delay(300);
+    flowStep(4, 'ok');       // Auth -> NATS (UserClaims)
+    await delay(300);
+    flowStep(5, 'ok');       // NATS -> Client (connected)
+    log('Connected', 'success');
+
+    if (id === 'invalid' || id === 'notoken') {
+      log('ERROR: Connection should have been rejected!', 'error');
+      addFlow('connect', WSS_URL, true, 'unexpected');
+      setBtn(id, 'failed');
+      await nc.drain();
+      return;
+    }
+
+    // Run pub/sub tests with diagram reactions
+    let allPassed = true;
+    for (const test of cfg.tests) {
+      await delay(200);
+      if (test.op === 'pub') {
+        const delivered = await testPub(nc, sc, test.subject);
+        const passed = (test.expect && delivered) || (!test.expect && !delivered);
+        if (test.expect && delivered) {
+          await flashEnforcement(true);
+          log(`PUB ${test.subject} - allowed`, 'success');
+          addFlow('pub', test.subject, true);
+        } else if (!test.expect && !delivered) {
+          await flashEnforcement(false);
+          log(`PUB ${test.subject} - denied (expected)`, 'success');
+          addFlow('pub', test.subject, false, 'permission denied');
+        } else if (test.expect && !delivered) {
+          await flashEnforcement(false);
+          log(`PUB ${test.subject} - denied (unexpected!)`, 'error');
+          addFlow('pub', test.subject, false, 'permission denied');
+          allPassed = false;
+        } else {
+          await flashEnforcement(true);
+          log(`PUB ${test.subject} - allowed (unexpected!)`, 'error');
+          addFlow('pub', test.subject, true, 'should be denied');
+          allPassed = false;
+        }
+      } else if (test.op === 'sub') {
+        const delivered = await testSub(nc, sc, test.subject);
+        if (test.expect && delivered) {
+          await flashEnforcement(true);
+          log(`SUB ${test.subject} - allowed`, 'success');
+          addFlow('sub', test.subject, true);
+        } else if (!test.expect && !delivered) {
+          await flashEnforcement(false);
+          log(`SUB ${test.subject} - denied (expected)`, 'success');
+          addFlow('sub', test.subject, false, 'permission denied');
+        } else if (test.expect && !delivered) {
+          await flashEnforcement(false);
+          log(`SUB ${test.subject} - denied (unexpected!)`, 'error');
+          addFlow('sub', test.subject, false, 'permission denied');
+          allPassed = false;
+        } else {
+          await flashEnforcement(true);
+          log(`SUB ${test.subject} - allowed (unexpected!)`, 'error');
+          addFlow('sub', test.subject, true, 'should be denied');
+          allPassed = false;
+        }
+      }
+    }
+
+    await nc.drain();
+    setBtn(id, allPassed ? 'passed' : 'failed');
+
+  } catch (err) {
+    log(`Error: ${err.message}`, 'error');
+    setBtn(id, 'failed');
+  } finally {
+    running = false;
+    setAllBtns(false);
+    await delay(1500);
+    if (!running) clearDiagram();
+  }
+}
+
+async function runAll() {
+  const ids = ['admin', 'publisher', 'subscriber', 'invalid', 'notoken'];
+  for (const id of ids) {
+    await runScenario(id);
+    await delay(500);
+  }
+}
+
+function resetAll() {
+  flowBody.innerHTML = '';
+  auditBody.innerHTML = '';
+  logBody.innerHTML = '';
+  document.querySelectorAll('.scenario-btn').forEach(b => {
+    b.classList.remove('running', 'passed', 'failed');
+  });
+  clearDiagram();
+  log('Dashboard cleared. Click a scenario to begin.', 'info');
+}
+
+// Expose to onclick handlers
+window.runScenario = runScenario;
+window.runAll = runAll;
+window.resetAll = resetAll;
+
+// Init
+connectAuditListener();
+log('Dashboard ready. Click a scenario to begin.', 'info');
+
+</script>
+</body>
+</html>

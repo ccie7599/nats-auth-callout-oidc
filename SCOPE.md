@@ -13,9 +13,11 @@ Demonstrate NATS auth-callout integrating with a generic OIDC identity provider 
 ## Deliverables
 
 1. Go auth-callout service validating OIDC tokens and mapping scopes to NATS pub/sub permissions
-2. Docker Compose environment (NATS server, auth service, mock OIDC provider)
-3. Go demo client exercising 6 scenarios (admin, publisher, subscriber, invalid token, no token, live PingOne)
-4. Documentation: README, architecture, Ping Identity swap guide
+2. Docker Compose environment (NATS server w/ TLS + WSS, auth service, nginx dashboard)
+3. Go demo client exercising 5 scenarios against PingOne (admin, publisher, subscriber, invalid token, no token)
+4. Interactive browser dashboard over WSS (dark theme, audit trail, scenario buttons)
+5. TLS everywhere: Let's Encrypt certs via Akamai DNS-01 on `nats-demo.connected-cloud.io`
+6. Documentation: README, architecture, decisions
 
 ## Scale Commitments
 
@@ -31,12 +33,13 @@ Demonstrate NATS auth-callout integrating with a generic OIDC identity provider 
 2. [ ] **Multi-region / multi-cluster** — Single Docker Compose stack only
 3. [ ] **Token refresh / rotation** — Demo uses short-lived tokens, no refresh flow
 4. [ ] **Custom policy engine** — Scope-to-permission mapping is a static Go map, not OPA/Cedar
-5. [ ] **TLS / mTLS** — Plain NATS for demo simplicity; production would require TLS
+5. [x] ~~**TLS / mTLS** — Plain NATS for demo simplicity~~ — TLS implemented with Let's Encrypt certs
 
 ## Exit Criteria
 
-- [ ] `make up && make demo` runs all 6 scenarios end-to-end with expected PASS/FAIL output
-- [ ] Auth-service logs show token validation decisions for each scenario
+- [x] `make up && make demo` runs all 5 scenarios end-to-end with expected PASS/FAIL output
+- [x] Auth-service logs show token validation decisions for each scenario
 - [ ] Unit tests pass for permission mapping logic
-- [ ] PingOne scenario works when trial credentials are configured (skipped gracefully otherwise)
-- [ ] README provides < 5-minute quick start
+- [x] PingOne is the sole identity provider — all scenarios validated against live PingOne tenant
+- [x] Interactive dashboard live at https://nats-demo.connected-cloud.io/
+- [x] README provides < 5-minute quick start

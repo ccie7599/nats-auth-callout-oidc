@@ -1,0 +1,10 @@
+certs/*.pem
+certs/*.key
+certs/*.crt
+!certs/.gitkeep
+.env
+*.exe
+*.test
+*.out
+auth-service/auth-service
+demo-client/demo-client
